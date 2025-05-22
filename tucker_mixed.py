@@ -110,8 +110,8 @@ def hh_qr(X):
 
 
 def chol_qr(X):
-    d_X, d_X_T = m_to_u_gpu([X, X.T], ["fp16", "fp16"])
-    d_B = torch.matmul(d_X, d_X_T)
+    d_X, d_X_T = m_to_u_gpu([X, X.T], ["fp64", "fp64"])
+    d_B = torch.matmul(d_X_T, d_X)
     B = to_u_cpu(d_B, "fp64")
     L = torch.linalg.cholesky(B)
     Q = torch.linalg.solve_triangular(L, X.T, upper=False).T
@@ -138,7 +138,7 @@ def qr(args, X):
 def rrf(args, X, r):
     nrm = torch.linalg.norm(X)
     S = make_gaussian(X.shape[1], r)
-    d_S, d_X = m_to_u_gpu([S,X], ["fp16", "fp16"])
+    d_S, d_X = m_to_u_gpu([S,X], ["fp64", "fp64"])
     Y = torch.matmul(d_X, d_S)
     Y = to_u_cpu(Y, "fp64")
     return qr(args, Y)
@@ -193,13 +193,17 @@ def ttmc(X, matrices, transpose, exclude=[]):
     for i in range(n):
         if i in exclude:
             continue
-        Y = tl.unfold(Y, i)
+        Y = torch.tensor(tl.unfold(Y.numpy(), i))
         U = matrices[i]
+        d_Y, d_U = m_to_u_gpu([Y, U], ["fp64", "fp64"])
         if transpose:
-            U = np.transpose(U)
-        Y = U @ Y
-        dims[i] = U.shape[0]
-        Y = tl.fold(Y, i, dims)
+            d_Y = d_U.T @ d_Y
+            dims[i] = U.shape[1]
+        else:
+            d_Y = d_U @ d_Y
+            dims[i] = U.shape[0]
+        Y = to_u_cpu(d_Y, "fp64")
+        Y = torch.tensor(tl.fold(Y.numpy(), i, dims))
     return Y
 
 ##################################################
@@ -225,9 +229,7 @@ def hooi(args, X, ranks):
     while iter < maxiters and not converged(err_curr, err_prev, args.tol):
 
         for n in range(N):
-            Y = tl.tenalg.multi_mode_dot(
-                X.numpy(), U_list, skip=n, transpose=True)
-            Y = torch.tensor(Y)
+            Y = ttmc(X, U_list, True, [n])
             U_n = update_factor(args, Y, n, ranks[n])
             U_list[n] = U_n
 
