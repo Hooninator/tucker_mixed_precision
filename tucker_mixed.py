@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import tensorly as tl
 import torch
 import argparse
+import pandas as pd
 
 from dataclasses import dataclass
 
@@ -60,7 +61,7 @@ def read_tensor(args):
     if '/' in args.tensorpath:
         X = loadmat(args.tensorpath, mat_dtype=True)['X']
         X_tensor = torch.tensor(
-            X[0][0][0], dtype=torch.float64, device=args.device)
+            X[0][0][0], dtype=torch.float64)
         return X_tensor
     else:
         return torch.tensor(tensors[args.tensorpath]().tensor, dtype=torch.float64)
@@ -292,7 +293,7 @@ def hooi(args, X, ranks):
         iter += 1
         errors.append(err_curr)
 
-    print(err_curr)
+    print(f"Final error: {err_curr}")
     return errors
 
 ##################################################
@@ -301,15 +302,27 @@ def hooi(args, X, ranks):
 #
 ##################################################
 
+def get_tensorname(path):
+    return path.split("/")[-1].split(".")[0]
+
+
+def rankstr(ranks):
+    return 'x'.join([str(s) for s in ranks])
+
+
+def get_filename(args):
+    return f"{get_tensorname(args.tensorpath)}-lra:{args.lra}-qr:{args.qrd}-init:{args.init}-ttmcu:{args.ttmc_u}-lrau:{args.lra_u}-{rankstr(args.ranks)}.csv"
+
 
 def write_stats(args, error_mat):
-    return
+    datadir = "./results/"
+    df = pd.DataFrame(error_mat)
+    df.to_csv(f"{datadir}{get_filename(args)}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--tensorpath", type=str)
-    parser.add_argument("--device", type=str)
     parser.add_argument("--maxiters", type=int)
     parser.add_argument("--tol", type=float)
     parser.add_argument("--ntrials", type=int, default=100)
