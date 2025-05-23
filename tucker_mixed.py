@@ -19,6 +19,10 @@ import time
 ##################################################
 
 
+def get_tensorname(path):
+    return path.split("/")[-1].split(".")[0]
+
+
 class Config:
 
     def __init__(self):
@@ -30,9 +34,13 @@ class Config:
         self.lra_fn = lra_fns[args.lra]
         self.qr_fn = qr_fns[args.qrd]
         self.init_fn = lra_fns[args.init]
+        self.ranks = args.ranks
+        self.tensorname = get_tensorname(args.tensorpath)
 
     def print(self):
         print("~~~~~~~~~~ CONFIGURATION ~~~~~~~~~~")
+        print(f"    Tensor: {self.tensorname}")
+        print(f"    Ranks: {self.ranks}")
         print(f"    Low-Rank Approximation Precision: {self.lra_u}")
         print(f"    TTMc Precision: {self.ttmc_u}")
         print(f"    Factor Matrix Init: {self.init_fn.__name__}")
@@ -49,12 +57,17 @@ precisions = {
     "fp64": torch.float64
 }
 
+def generate_normal_100():
+    return torch.randn((100, 100, 100), dtype=torch.float64)
+
 tensors = {
     "IL2": tl.datasets.load_IL2data,
     "covid19_serology": tl.datasets.load_covid19_serology,
     "indian_pines": tl.datasets.load_indian_pines,
-    "kinetic": tl.datasets.load_kinetic
+    "kinetic": tl.datasets.load_kinetic,
+    "normal_100": generate_normal_100
 }
+
 
 
 def read_tensor(args):
@@ -279,7 +292,7 @@ def hooi(args, X, ranks):
     maxiters = args.maxiters
     iter = 0
     N = X.ndim
-    while iter < maxiters and not converged(err_curr, err_prev, args.tol):
+    while iter < maxiters:
 
         for n in range(N):
             Y = ttmc(X, U_list, True, [n])
@@ -301,10 +314,6 @@ def hooi(args, X, ranks):
 #               DRIVER AND STATS
 #
 ##################################################
-
-def get_tensorname(path):
-    return path.split("/")[-1].split(".")[0]
-
 
 def rankstr(ranks):
     return 'x'.join([str(s) for s in ranks])

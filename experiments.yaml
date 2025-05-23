@@ -1,0 +1,52 @@
+tensors:
+  ./tensor_data_eem/EEM18.mat:
+    - [5, 5, 5]
+    - [10, 50, 10]
+  indian_pines:
+    - [10, 10, 30]
+    - [40, 40, 60]
+  covid19_serology:
+    - [10, 5, 5]
+    - [100, 5, 10]
+  normal_100:
+    - [10, 10, 10]
+    - [40, 40, 40]
+  kinetic:
+    - [10, 6, 5, 10]
+    - [20, 6, 5, 20]
+
+params:
+  baseline:
+    lra: svd
+    qr: hh_qr
+    init: svd
+    ttmc_u: fp64
+    lra_u: fp64
+
+  rand_fp64:
+    lra: rand_svd
+    qr: hh_qr
+    init: rand_svd
+    ttmc_u: fp64
+    lra_u: fp64
+
+  rand_lra_fp16:
+    lra: rand_svd
+    qr: hh_qr
+    init: rand_svd
+    ttmc_u: fp64
+    lra_u: fp16
+
+  rand_all_fp16:
+    lra: rand_svd
+    qr: hh_qr
+    init: rand_svd
+    ttmc_u: fp16
+    lra_u: fp16
+
+  rand_all_fp16_cholqr:
+    lra: rand_svd
+    qr: chol_qr
+    init: rand_svd
+    ttmc_u: fp16
+    lra_u: fp16
