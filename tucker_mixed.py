@@ -17,10 +17,11 @@ import time
 #
 ##################################################
 
+
 class Config:
 
     def __init__(self):
-        return # Everything blank for now
+        return  # Everything blank for now
 
     def set_from_args(self, args):
         self.lra_u = args.lra_u
@@ -37,6 +38,7 @@ class Config:
         print(f"    Factor Matrix Update: {self.lra_fn.__name__}")
         print(f"    QR Decomposition: {self.qr_fn.__name__}")
         print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
+
 
 config = Config()
 
@@ -114,14 +116,16 @@ def reconstruct(G, U_list):
     return torch.tensor(Y)
 
 # Take row or columnwise norm of B, then scale appropriate dimension of A
+
+
 def nrm_scale(A, B, dim, inv):
     norms = torch.norm(B, dim=dim)
     if inv:
         norms = torch.reciprocal(norms)
-    if dim==0:
-        A_scaled = A / norms[None, :] # Scale each column
-    elif dim==1:
-        A_scaled = A / norms[:, None] # Scale each row
+    if dim == 0:
+        A_scaled = A / norms[None, :]  # Scale each column
+    elif dim == 1:
+        A_scaled = A / norms[:, None]  # Scale each row
     else:
         raise Exception("invalid dimension")
     return A_scaled
@@ -130,7 +134,7 @@ def nrm_scale(A, B, dim, inv):
 def scaled_ugemm(A, B, precision):
     norms = torch.norm(A, dim=1)
     for i in range(len(norms)):
-        if norms[i]==0:
+        if norms[i] == 0:
             norms[i] = 1
     A_scaled = A / norms[:, None]
     d_A, d_B = m_to_u_gpu([A_scaled, B], precision)
@@ -200,10 +204,10 @@ def svd(X, r):
 
 
 def rand_svd(X, r):
-    Q = rrf(X, r) 
+    Q = rrf(X, r)
     B_T = scaled_ugemm(X.T, Q, config.lra_u).T
-    U_tilde, _, _ = torch.linalg.svd(B_T) # O(R^{2N})
-    return scaled_ugemm(Q, U_tilde[:,:r], config.lra_u)#Q @ U_tilde[:, :r]
+    U_tilde, _, _ = torch.linalg.svd(B_T)  # O(R^{2N})
+    return scaled_ugemm(Q, U_tilde[:, :r], config.lra_u)  # Q @ U_tilde[:, :r]
 
 
 lra_fns = {
@@ -235,6 +239,7 @@ def update_factor(Y, k, rank):
 #
 ##################################################
 
+
 def ttmc(X, matrices, transpose, exclude=[]):
     n = len(matrices)
     dims = list(X.shape)
@@ -262,7 +267,7 @@ def ttmc(X, matrices, transpose, exclude=[]):
 
 def hooi(args, X, ranks):
 
-    # Initialize factor matrices 
+    # Initialize factor matrices
     U_list = init_factors(X, ranks)
     G = form_core(X, U_list)
     err_curr = compute_error(X, G, U_list)
