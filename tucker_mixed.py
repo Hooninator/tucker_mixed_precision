@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from scipy.io import loadmat
 
+import time
 
 ##################################################
 #
@@ -139,6 +140,14 @@ def scaled_ugemm(A, B, precision):
     C = C_scaled / inv_norms[:, None]
     return C
 
+
+def ugemm(A, B, precision):
+    d_A, d_B = m_to_u_gpu([A, B], precision)
+    d_C = d_A @ d_B
+    C = to_u_cpu(d_C, "fp64")
+    return C
+
+
 ##################################################
 #
 #               QR Decomposition
@@ -253,7 +262,7 @@ def ttmc(X, matrices, transpose, exclude=[]):
 
 def hooi(args, X, ranks):
 
-    # Initialize factor matrices with RRF
+    # Initialize factor matrices 
     U_list = init_factors(X, ranks)
     G = form_core(X, U_list)
     err_curr = compute_error(X, G, U_list)
@@ -327,7 +336,10 @@ if __name__ == "__main__":
 
     error_mat = np.zeros(shape=(args.ntrials, args.maxiters + 1))
     for i in range(args.ntrials):
+        stime = time.time()
         errors = hooi(args, X, ranks)
+        etime = time.time()
+        print(f"Time: {etime-stime}s")
         error_mat[i] = errors
 
     write_stats(args, error_mat)
