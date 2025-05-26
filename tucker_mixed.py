@@ -61,11 +61,11 @@ def generate_normal_100():
     return torch.randn((100, 100, 100), dtype=torch.float64)
 
 tensors = {
-    "IL2": tl.datasets.load_IL2data,
-    "covid19_serology": tl.datasets.load_covid19_serology,
-    "indian_pines": tl.datasets.load_indian_pines,
-    "kinetic": tl.datasets.load_kinetic,
-    "normal_100": generate_normal_100
+    "IL2": tl.datasets.load_IL2data().tensor,
+    "covid19_serology": tl.datasets.load_covid19_serology().tensor,
+    "indian_pines": tl.datasets.load_indian_pines().tensor,
+    "kinetic": tl.datasets.load_kinetic().tensor,
+    "normal_100": generate_normal_100()
 }
 
 
@@ -77,7 +77,7 @@ def read_tensor(args):
             X[0][0][0], dtype=torch.float64)
         return X_tensor
     else:
-        return torch.tensor(tensors[args.tensorpath]().tensor, dtype=torch.float64)
+        return torch.tensor(tensors[args.tensorpath], dtype=torch.float64)
 
 
 def compute_error(X, G, U_list):
