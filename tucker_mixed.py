@@ -90,22 +90,27 @@ def compute_error(X, G, U_list):
     return (torch.linalg.norm(X - T) / torch.linalg.norm(X)).item()
 
 
-def gpu_compute_error(d_X, d_G, d_U_list, d_D_list):
-    # Unscale each U
-    N = d_X.ndim
-    for n in range(N):
-        d_U_list[n] = d_U_list[n] * d_D_list[n][:, None]
+def gpu_compute_error(d_X_fp64, d_G, d_U_list):
 
+    assert d_X_fp64.dtype == torch.float64
+    # Unscale each U
+    # N = d_X.ndim
+    # for n in range(N):
+    #     d_U_list[n] = d_U_list[n] * d_D_list[n][:, None]
+
+    # Compute this in fp64
     d_G = to_u(d_G, 'fp64')
+    d_U_list = m_to_u(d_U_list, 'fp64')
     d_T = ttmc_fast(d_G, d_U_list, False)
 
     # Rescale
-    for n in range(N):
-        d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
-        d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
+    # for n in range(N):
+    #     d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
+    #     d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
 
-    d_X = to_u(d_X, 'fp64')
-    return (torch.linalg.norm(d_X - d_T) / torch.linalg.norm(d_X)).item()
+    # d_X = to_u(d_X, 'fp64')
+    d_U_list = m_to_u(d_U_list, config.ttmc_u)
+    return (torch.linalg.norm(d_X_fp64 - d_T) / torch.linalg.norm(d_X_fp64)).item()
 
 
 def unfold(X, mode):
@@ -138,6 +143,10 @@ def make_gaussian(m, n, device='cpu', precision='fp64'):
 
 def to_u(X, u):
     return X.to(dtype=precisions[u])
+
+
+def m_to_u(tensors, u):
+    return [to_u(t, u) for t in tensors]
 
 
 def to_u_gpu(X, u):
@@ -175,20 +184,21 @@ def form_core(X, U_list):
     return torch.tensor(Y)
 
 
-def gpu_form_core(d_X, d_U_list, d_D_list):
-    # Unscale each U
-    N = d_X.ndim
-    for n in range(N):
-        d_U_list[n] = d_U_list[n] * d_D_list[n][:, None] # Converts to fp64
 
-    # form the core as normal
-    d_X = to_u(d_X, 'fp64')
+def gpu_form_core(d_X, d_U_list):
+    # Unscale each U
+    # N = d_X.ndim
+    # for n in range(N):
+    #     d_U_list[n] = d_U_list[n] * d_D_list[n][:, None] # Converts to fp64
+
+    # Form the core as normal
+    # d_X = to_u(d_X, 'fp64')
     d_G = ttmc_fast(d_X, d_U_list, True)
 
     # Rescale
-    for n in range(N):
-        d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
-        d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
+    # for n in range(N):
+    #     d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
+    #     d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
 
     return d_G
 
@@ -394,6 +404,11 @@ def init_scaling_matrices(d_X):
     return d_D_list
 
 
+def init_scaling_matrix_sum(d_X):
+    d_D = torch.sum(d_X, dim=([d for d in range(d_X.dim()) if d != 0]))
+    return d_D
+
+
 def apply_scaling_matrices(d_X, d_D_list, inv):
     N = d_X.ndim
     assert N == len(d_D_list)
@@ -408,6 +423,13 @@ def apply_scaling_matrices(d_X, d_D_list, inv):
         shape[n] = 1
     return d_X
         
+
+def apply_scaling_matrix(d_X, d_D, inv):
+    if inv:
+        d_X = d_X / d_D.view([1 if d != 0 else -1 for d in range(d_X.dim())])
+    else:
+        d_X = d_X * d_D.view([1 if d != 0 else -1 for d in range(d_X.dim())])
+    return d_X
 
 
 ##################################################
@@ -498,11 +520,12 @@ def hooi_fast(X, ranks, maxiters):
 
     # Move tensor to GPU 
     d_X = to_u_gpu(X, "fp64") # Keep things in fp64 for now, since we need to do scaling
-    d_X_unscaled = to_u_gpu(X, "fp64") # Unscaled copy for error computation
 
     # Compute scaling matrices
-    d_D_list = init_scaling_matrices(d_X)
-    d_X = apply_scaling_matrices(d_X, d_D_list, True)
+    d_D = init_scaling_matrix_sum(d_X)
+    d_X = apply_scaling_matrix(d_X, d_D, True)
+
+    d_X_fp64 = to_u(d_X, 'fp64') # For error computation
 
     # Convert to ttmc precision
     d_X = to_u(d_X, config.ttmc_u)
@@ -510,8 +533,12 @@ def hooi_fast(X, ranks, maxiters):
     # Init factor matrices
     d_U_list = init_factors(d_X, ranks)
 
-    d_G = gpu_form_core(d_X, d_U_list, d_D_list) # G = unscaled factors * scaled X
-    err_curr = gpu_compute_error(d_X, d_G, d_U_list, d_D_list)
+    # Need to unscale the first factor matrix to get the correct lra
+    d_U_list[0] = apply_scaling_matrix(d_U_list[0], d_D, False)
+    d_U_list[0] = to_u(d_U_list[0], config.ttmc_u)
+
+    d_G = gpu_form_core(d_X, d_U_list) 
+    err_curr = gpu_compute_error(d_X_fp64, d_G, d_U_list)
     err_prev = torch.linalg.norm(d_X).to(device='cpu')
     errors = [err_curr]
 
@@ -525,14 +552,15 @@ def hooi_fast(X, ranks, maxiters):
             d_U_n = update_factor(d_Y_n, n, ranks[n])
             d_U_list[n] = d_U_n
         
-        d_G = gpu_form_core(d_X, d_U_list, d_D_list)
+        d_G = gpu_form_core(d_X, d_U_list)
         err_prev = err_curr
-        err_curr = gpu_compute_error(d_X, d_G, d_U_list, d_D_list)
+        err_curr = gpu_compute_error(d_X_fp64, d_G, d_U_list)
 
         iter += 1
         errors.append(err_curr)
 
     print(f"Final error: {err_curr}")
+    print(errors)
     return errors
 
 
