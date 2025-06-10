@@ -82,9 +82,11 @@ def generate_evil():
     size = (50, 50, 50, 50)
     T = torch.randn(size) * upper + lower
     S = torch.randint(0, 2, (size))
-    T = torch.mul(T, S) # Zero out some random entries
-    S = S.to(dtype=torch.float64).uniform_(lower, lower * 2) # uniform random noise
+    T = torch.mul(T, S)  # Zero out some random entries
+    S = S.to(dtype=torch.float64).uniform_(
+        lower, lower * 2)  # uniform random noise
     return T + S
+
 
 tensors = {
     "IL2": tl.datasets.load_IL2data().tensor,
@@ -410,7 +412,8 @@ def init_scaling_matrix_sum(d_X):
 
 def init_scaling_matrix_inf(d_X):
     # Slow
-    d_D = torch.stack([torch.max(torch.select(d_X, 0, i) ) for i in range(d_X.shape[0])])
+    d_D = torch.stack([torch.max(torch.select(d_X, 0, i))
+                      for i in range(d_X.shape[0])])
     return torch.tensor(d_D, device='cuda', dtype=precisions[config.lra_u])
 
 
@@ -512,7 +515,7 @@ def ttmc_faster(d_X, matrices, transpose, exclude=[]):
         d_U = matrices[i]
 
         if i == 0:
-            d_Y = d_Y.view(dims[i], d_Y.numel() // dims[i])
+            d_Y = d_Y.reshape(dims[i], -1)
             if transpose:
                 d_Y = d_U.T @ d_Y
                 dims[i] = d_U.shape[1]
@@ -521,17 +524,18 @@ def ttmc_faster(d_X, matrices, transpose, exclude=[]):
                 dims[i] = d_U.shape[0]
             d_Y = d_Y.view(*dims)
             continue
-            
+
         nk = d_Y.shape[i]
 
-        M_k = reduce(lambda a,b: a*b, [d_Y.shape[d] for d in range(i)])
+        M_k = reduce(lambda a, b: a*b, [d_Y.shape[d] for d in range(i)])
 
-        if i==n-1:
+        if i == n-1:
             P_k = 1
         else:
-            P_k = reduce(lambda a,b: a*b, [d_Y.shape[d] for d in range(i+1, n)])
+            P_k = reduce(lambda a, b: a*b, [d_Y.shape[d]
+                         for d in range(i+1, n)])
 
-        d_Y = d_Y.view(M_k, nk, P_k)
+        d_Y = d_Y.reshape(M_k, nk, P_k)
 
         if transpose:
             d_Y_out = torch.zeros((M_k, d_U.shape[1], P_k))
@@ -541,13 +545,13 @@ def ttmc_faster(d_X, matrices, transpose, exclude=[]):
 
         if transpose:
             for l in range(P_k):
-                d_Y_out[:,:,l] = d_Y[:,:,l] @ d_U
+                d_Y_out[:, :, l] = d_Y[:, :, l] @ d_U
             dims[i] = d_U.shape[1]
         else:
             for l in range(P_k):
-                d_Y_out[:,:,l] =  d_Y[:,:,l] @ d_U.T
+                d_Y_out[:, :, l] = d_Y[:, :, l] @ d_U.T
             dims[i] = d_U.shape[0]
-        d_Y = d_Y_out.view(*dims)
+        d_Y = d_Y_out.reshape(*dims)
 
     return d_Y
 
@@ -623,6 +627,7 @@ def hooi_fast(X, ranks, maxiters):
     while iter < maxiters:
 
         stime = time.time()
+
         for n in range(N):
 
             d_Y_n = ttmc_faster(d_X, d_U_list, True, [n])
@@ -673,6 +678,8 @@ def get_filename(args):
 
 
 datadir = "./results/results_v2/"
+
+
 def write_stats(args, error_mat):
     df = pd.DataFrame(error_mat)
     df.to_csv(f"{datadir}error_{get_filename(args)}")
