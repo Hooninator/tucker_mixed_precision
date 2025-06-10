@@ -6,6 +6,7 @@ import argparse
 import pandas as pd
 
 from dataclasses import dataclass
+from functools import reduce
 
 from scipy.io import loadmat
 
@@ -119,22 +120,12 @@ def compare_norm(X1, X2):
 def gpu_compute_error(d_X_fp64, d_G, d_U_list):
 
     assert d_X_fp64.dtype == torch.float64
-    # Unscale each U
-    # N = d_X.ndim
-    # for n in range(N):
-    #     d_U_list[n] = d_U_list[n] * d_D_list[n][:, None]
 
     # Compute this in fp64
     d_G = to_u(d_G, 'fp64')
     d_U_list = m_to_u(d_U_list, 'fp64')
-    d_T = ttmc_fast(d_G, d_U_list, False)
+    d_T = ttmc_faster(d_G, d_U_list, False)
 
-    # Rescale
-    # for n in range(N):
-    #     d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
-    #     d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
-
-    # d_X = to_u(d_X, 'fp64')
     d_U_list = m_to_u(d_U_list, config.ttmc_u)
     return (torch.linalg.norm(d_X_fp64 - d_T) / torch.linalg.norm(d_X_fp64)).item()
 
@@ -211,20 +202,7 @@ def form_core(X, U_list):
 
 
 def gpu_form_core(d_X, d_U_list):
-    # Unscale each U
-    # N = d_X.ndim
-    # for n in range(N):
-    #     d_U_list[n] = d_U_list[n] * d_D_list[n][:, None] # Converts to fp64
-
-    # Form the core as normal
-    # d_X = to_u(d_X, 'fp64')
-    d_G = ttmc_fast(d_X, d_U_list, True)
-
-    # Rescale
-    # for n in range(N):
-    #     d_U_list[n] = d_U_list[n] / d_D_list[n][:, None]
-    #     d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
-
+    d_G = ttmc_faster(d_X, d_U_list, True)
     return d_G
 
 
@@ -519,6 +497,60 @@ def ttmc_fast(d_X, matrices, transpose, exclude=[]):
         d_Y = gpu_fold(d_Y, i, dims)
     return d_Y
 
+
+def ttmc_faster(d_X, matrices, transpose, exclude=[]):
+
+    n = len(matrices)
+    dims = list(d_X.shape)
+    d_Y = d_X
+
+    for i in range(n):
+
+        if i in exclude:
+            continue
+
+        d_U = matrices[i]
+
+        if i == 0:
+            d_Y = d_Y.view(dims[i], d_Y.numel() // dims[i])
+            if transpose:
+                d_Y = d_U.T @ d_Y
+                dims[i] = d_U.shape[1]
+            else:
+                d_Y = d_U @ d_Y
+                dims[i] = d_U.shape[0]
+            d_Y = d_Y.view(*dims)
+            continue
+            
+        nk = d_Y.shape[i]
+
+        M_k = reduce(lambda a,b: a*b, [d_Y.shape[d] for d in range(i)])
+
+        if i==n-1:
+            P_k = 1
+        else:
+            P_k = reduce(lambda a,b: a*b, [d_Y.shape[d] for d in range(i+1, n)])
+
+        d_Y = d_Y.view(M_k, nk, P_k)
+
+        if transpose:
+            d_Y_out = torch.zeros((M_k, d_U.shape[1], P_k))
+        else:
+            d_Y_out = torch.zeros((M_k, d_U.shape[0], P_k))
+        d_Y_out = d_Y_out.to(device='cuda', dtype=d_Y.dtype)
+
+        if transpose:
+            for l in range(P_k):
+                d_Y_out[:,:,l] = d_Y[:,:,l] @ d_U
+            dims[i] = d_U.shape[1]
+        else:
+            for l in range(P_k):
+                d_Y_out[:,:,l] =  d_Y[:,:,l] @ d_U.T
+            dims[i] = d_U.shape[0]
+        d_Y = d_Y_out.view(*dims)
+
+    return d_Y
+
 ##################################################
 #
 #               MAIN HOOI FUNCTION
@@ -592,7 +624,8 @@ def hooi_fast(X, ranks, maxiters):
 
         stime = time.time()
         for n in range(N):
-            d_Y_n = ttmc_fast(d_X, d_U_list, True, [n])
+
+            d_Y_n = ttmc_faster(d_X, d_U_list, True, [n])
 
             if n == 0:
                 d_Y_n = apply_scaling_matrix(d_Y_n, d_D, False)
@@ -604,6 +637,7 @@ def hooi_fast(X, ranks, maxiters):
                 d_U_n = to_u(d_U_n, config.ttmc_u)
 
             d_U_list[n] = d_U_n
+
         etime = time.time()
         times.append((etime - stime))
 
@@ -641,7 +675,7 @@ def get_filename(args):
 datadir = "./results/results_v2/"
 def write_stats(args, error_mat):
     df = pd.DataFrame(error_mat)
-    df.to_csv(f"{datadir}{get_filename(args)}")
+    df.to_csv(f"{datadir}error_{get_filename(args)}")
 
 
 def write_times(args, times_mat):
@@ -688,6 +722,7 @@ if __name__ == "__main__":
         errors, times = hooi_fast(X, ranks, args.maxiters)
         error_mat[i] = errors
         times_mat[i] = times
+    print(f"Final times: {times_mat[args.ntrials-1]}")
 
     write_stats(args, error_mat)
     write_times(args, times_mat)
