@@ -62,17 +62,38 @@ precisions = {
     "fp64": torch.float64
 }
 
+
 def generate_normal_100():
     return torch.randn((100, 100, 100), dtype=torch.float64)
+
+
+def generate_small_test():
+    data = [[[1, 2, 1], [2, 1, 2], [7, 2, 2]],
+            [[1, 2, 1], [3, 1, 4], [2, 5, 2]],
+            [[1, 2, 1], [2, 1, 4], [2, 2, 2]]]
+    return torch.tensor(data, dtype=torch.float64)
+
+
+def generate_evil():
+    u = "fp16"
+    upper = torch.finfo(precisions[u]).max * 1e5
+    lower = torch.finfo(precisions[u]).tiny * 1e-5
+    size = (50, 50, 50, 50)
+    T = torch.randn(size) * upper + lower
+    S = torch.randint(0, 2, (size))
+    T = torch.mul(T, S) # Zero out some random entries
+    S = S.to(dtype=torch.float64).uniform_(lower, lower * 2) # uniform random noise
+    return T + S
 
 tensors = {
     "IL2": tl.datasets.load_IL2data().tensor,
     "covid19_serology": tl.datasets.load_covid19_serology().tensor,
     "indian_pines": tl.datasets.load_indian_pines().tensor,
     "kinetic": tl.datasets.load_kinetic().tensor,
-    "normal_100": generate_normal_100()
+    "normal_100": generate_normal_100(),
+    "small_test": generate_small_test(),
+    "evil": generate_evil()
 }
-
 
 
 def read_tensor(args):
@@ -88,6 +109,11 @@ def read_tensor(args):
 def compute_error(X, G, U_list):
     T = reconstruct(G, U_list)
     return (torch.linalg.norm(X - T) / torch.linalg.norm(X)).item()
+
+
+def compare_norm(X1, X2):
+    assert X1.shape == X2.shape
+    return (torch.norm(X1) - torch.norm(X2)) / torch.norm(X1).item()
 
 
 def gpu_compute_error(d_X_fp64, d_G, d_U_list):
@@ -114,7 +140,7 @@ def gpu_compute_error(d_X_fp64, d_G, d_U_list):
 
 
 def unfold(X, mode):
-    if config.mode=="cuda":
+    if config.mode == "cuda":
         return gpu_unfold(X, mode)
     else:
         return cpu_unfold(X, mode)
@@ -138,7 +164,7 @@ def gpu_fold(d_X, mode, dims):
 
 
 def make_gaussian(m, n, device='cpu', precision='fp64'):
-    return torch.randn(m, n, dtype=precisions[u], device=device)
+    return torch.randn(m, n, dtype=precisions[precision], device=device)
 
 
 def to_u(X, u):
@@ -184,7 +210,6 @@ def form_core(X, U_list):
     return torch.tensor(Y)
 
 
-
 def gpu_form_core(d_X, d_U_list):
     # Unscale each U
     # N = d_X.ndim
@@ -201,7 +226,6 @@ def gpu_form_core(d_X, d_U_list):
     #     d_U_list[n] = to_u(d_U_list[n], config.ttmc_u)
 
     return d_G
-
 
 
 def reconstruct(G, U_list):
@@ -235,10 +259,10 @@ def compute_scaling_row(d_X):
 
 # TODO: row and column scaling -- iterative row and column scaling
 # can write a least squares problem to get the best possible diagonal entries
-# scales rows and columns iteratively -- one/two times 
-# Evertything in GPU --- scaling may not be needed 
+# scales rows and columns iteratively -- one/two times
+# Evertything in GPU --- scaling may not be needed
 # Persistenyl store input tensor and factors in fp16 -- dont' convert a bunch
-# and also apply some noramlzjation thing at the start to the tensor once 
+# and also apply some noramlzjation thing at the start to the tensor once
 # keep accumulating lambada scaling factor -- this can be in high precision -- then scale back once at the very end
 def scaled_ugemm(A, B, precision):
     norms = torch.norm(A, dim=1)
@@ -305,11 +329,6 @@ def qr(X):
     qr_fn = config.qr_fn
     return qr_fn(X)
 
-
-def gpu_qr(X):
-    qr_fn = config.gpu_qr_fns
-    return qr_fn(X)
-
 ##################################################
 #
 #               FACTOR MATRIX INIT/UPDATE
@@ -320,17 +339,18 @@ def gpu_qr(X):
 def rrf(X, r):
     l = 5
     nrm = torch.linalg.norm(X)
-    S = make_gaussian(X.shape[1], r+l) 
+    S = make_gaussian(X.shape[1], r+l)
     Y = scaled_ugemm(X, S, config.lra_u)
     return qr(Y)
 
 
 def gpu_rrf(d_X, r):
     l = 5
-    S = make_gaussian(d_X.shape[1], r+l, 'cuda', config.ttmc_u) #TODO: Only do this once?
+    # TODO: Only do this once?
+    S = make_gaussian(d_X.shape[1], r+l, 'cuda', config.ttmc_u)
     Y = d_X @ S
     Y = to_u(Y, 'fp64')
-    return gpu_qr(Y)
+    return qr(Y)
 
 
 def svd(X, r):
@@ -392,6 +412,7 @@ def update_factor(Y, k, rank):
 #
 ##################################################
 
+
 def init_scaling_matrices(d_X):
     d_D_list = []
     N = d_X.ndim
@@ -409,12 +430,34 @@ def init_scaling_matrix_sum(d_X):
     return d_D
 
 
+def init_scaling_matrix_inf(d_X):
+    # Slow
+    d_D = torch.stack([torch.max(torch.select(d_X, 0, i) ) for i in range(d_X.shape[0])])
+    return torch.tensor(d_D, device='cuda', dtype=precisions[config.lra_u])
+
+
+def init_scaling_matrix_single(d_X):
+    val = torch.max(d_X)
+    return torch.eye(d_X.shape[0], dtype=torch.float64) * val
+
+
+# Solve an instance of the orthogonal Procrustes problem
+# min_Q \|QX - E\|_F, where E is a matrix of all ones and Q is orthogonal
+# This is solved by computing M = EX^T, which is equivalent to summing all the columns of X and replicating it n times
+# then taking the SVD of M, M = UDV^T, and computing UV^T
+def init_scaling_matrix_ortho(d_X):
+    m = torch.sum(d_X, dim=([d for d in range(d_X.dim()) if d != 0]))
+    M = torch.stack([m for _ in range(d_X.shape[0])])
+    U, D, V_T = torch.linalg.svd(M)
+    return U @ V_T
+
+
 def apply_scaling_matrices(d_X, d_D_list, inv):
     N = d_X.ndim
     assert N == len(d_D_list)
     shape = [1] * N
     for n in range(N):
-        # Scale n-slices 
+        # Scale n-slices
         shape[n] = -1
         if inv:
             d_X = d_X / d_D_list[n].view(*shape)
@@ -422,7 +465,7 @@ def apply_scaling_matrices(d_X, d_D_list, inv):
             d_X = d_X * d_D_list[n].view(*shape)
         shape[n] = 1
     return d_X
-        
+
 
 def apply_scaling_matrix(d_X, d_D, inv):
     if inv:
@@ -469,13 +512,10 @@ def ttmc_fast(d_X, matrices, transpose, exclude=[]):
         d_U = matrices[i]
         if transpose:
             d_Y = d_U.T @ d_Y
-            #d_Y = scaled_ugemm(d_Y.T, d_U, config.ttmc_u).T
             dims[i] = d_U.shape[1]
         else:
             d_Y = d_U @ d_Y
-            #d_Y = scaled_ugemm(d_U, d_Y, config.ttmc_u)
             dims[i] = d_U.shape[0]
-        #d_Y = torch.tensor(tl.fold(Y.numpy(), i, dims))
         d_Y = gpu_fold(d_Y, i, dims)
     return d_Y
 
@@ -518,52 +558,70 @@ def hooi(X, ranks, maxiters):
 
 def hooi_fast(X, ranks, maxiters):
 
-    # Move tensor to GPU 
-    d_X = to_u_gpu(X, "fp64") # Keep things in fp64 for now, since we need to do scaling
+    # Move tensor to GPU
+    # Keep things in fp64 for now, since we need to do scaling
+    d_X = to_u_gpu(X, 'fp64')
+    d_X_fp64 = to_u(d_X, 'fp64')  # For error computation
 
-    # Compute scaling matrices
-    d_D = init_scaling_matrix_sum(d_X)
-    d_X = apply_scaling_matrix(d_X, d_D, True)
-
-    d_X_fp64 = to_u(d_X, 'fp64') # For error computation
-
-    # Convert to ttmc precision
-    d_X = to_u(d_X, config.ttmc_u)
+    # Compute scaling matrix
+    d_D = init_scaling_matrix_inf(d_X)
 
     # Init factor matrices
     d_U_list = init_factors(d_X, ranks)
 
-    # Need to unscale the first factor matrix to get the correct lra
+    # Convert to ttmc precision
+    d_X = apply_scaling_matrix(d_X, d_D, True)
+    d_X = to_u(d_X, config.ttmc_u)
+
+    # Compute initial error
     d_U_list[0] = apply_scaling_matrix(d_U_list[0], d_D, False)
     d_U_list[0] = to_u(d_U_list[0], config.ttmc_u)
-
-    d_G = gpu_form_core(d_X, d_U_list) 
+    d_G = gpu_form_core(d_X, d_U_list)
+    d_U_list[0] = apply_scaling_matrix(d_U_list[0], d_D, True)
+    d_U_list[0] = to_u(d_U_list[0], config.ttmc_u)
     err_curr = gpu_compute_error(d_X_fp64, d_G, d_U_list)
+    print(f"Initial error: {err_curr}")
     err_prev = torch.linalg.norm(d_X).to(device='cpu')
     errors = [err_curr]
 
     # Main loop
     iter = 0
     N = d_X.ndim
+    times = [0]
     while iter < maxiters:
 
+        stime = time.time()
         for n in range(N):
             d_Y_n = ttmc_fast(d_X, d_U_list, True, [n])
+
+            if n == 0:
+                d_Y_n = apply_scaling_matrix(d_Y_n, d_D, False)
+
             d_U_n = update_factor(d_Y_n, n, ranks[n])
+
+            if n == 0:
+                d_U_n = apply_scaling_matrix(d_U_n, d_D, False)
+                d_U_n = to_u(d_U_n, config.ttmc_u)
+
             d_U_list[n] = d_U_n
-        
-        d_G = gpu_form_core(d_X, d_U_list)
+        etime = time.time()
+        times.append((etime - stime))
+
         err_prev = err_curr
+        d_G = gpu_form_core(d_X, d_U_list)
+        d_U_list[0] = apply_scaling_matrix(d_U_list[0], d_D, True)
+        d_U_list[0] = to_u(d_U_list[0], config.ttmc_u)
         err_curr = gpu_compute_error(d_X_fp64, d_G, d_U_list)
 
         iter += 1
         errors.append(err_curr)
 
     print(f"Final error: {err_curr}")
-    print(errors)
-    return errors
+    return errors, times
 
 
+def hooi_scaled(X, ranks, maxiters):
+    return
 
 
 ##################################################
@@ -580,10 +638,15 @@ def get_filename(args):
     return f"{get_tensorname(args.tensorpath)}-lra:{args.lra}-qr:{args.qrd}-init:{args.init}-ttmcu:{args.ttmc_u}-lrau:{args.lra_u}-{rankstr(args.ranks)}.csv"
 
 
+datadir = "./results/results_v2/"
 def write_stats(args, error_mat):
-    datadir = "./results/"
     df = pd.DataFrame(error_mat)
     df.to_csv(f"{datadir}{get_filename(args)}")
+
+
+def write_times(args, times_mat):
+    df = pd.DataFrame(times_mat)
+    df.to_csv(f"{datadir}timing_{get_filename(args)}")
 
 
 if __name__ == "__main__":
@@ -620,12 +683,11 @@ if __name__ == "__main__":
     print(f"Reference Error: {ref_error}")
 
     error_mat = np.zeros(shape=(args.ntrials, args.maxiters + 1))
+    times_mat = np.zeros(shape=(args.ntrials, args.maxiters + 1))
     for i in range(args.ntrials):
-        stime = time.time()
-        errors = hooi_fast(X, ranks, args.maxiters)
-        #errors = hooi(X, ranks, args.maxiters)
-        etime = time.time()
-        print(f"Time: {etime-stime}s")
+        errors, times = hooi_fast(X, ranks, args.maxiters)
         error_mat[i] = errors
+        times_mat[i] = times
 
     write_stats(args, error_mat)
+    write_times(args, times_mat)

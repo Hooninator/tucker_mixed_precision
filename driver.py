@@ -1,6 +1,8 @@
 from yaml import load, Loader
 
-header = """#!/usr/bin/bash
+logname = 'log_v2'
+
+header = f"""#!/usr/bin/bash
 #SBATCH -G 1
 #SBATCH -A m1266_g
 #SBATCH -t 01:00:00
@@ -10,8 +12,8 @@ header = """#!/usr/bin/bash
 #SBATCH -q regular 
 
 source ./env/bin/activate
-if ! [ -f "./log.csv" ]; then
-    echo 'tensor,ranks,init,lra,qrd,ttmc_u,lra_u,status' > log.csv
+if ! [ -f "./{logname}.csv" ]; then
+    echo 'tensor,ranks,init,lra,qrd,ttmc_u,lra_u,status' > {logname}.csv
 fi
 """
 
@@ -32,9 +34,9 @@ with open('./experiments.yaml', 'r') as infile, open('./run.sh', 'w') as out:
             rankstr = ' '.join([str(r) for r in ranks])
             for param in d['params'].values():
                 record = f"{tensor},{'x'.join([str(r) for r in ranks])},{param['init']},{param['lra']},{param['qr']},{param['ttmc_u']},{param['lra_u']}"
-                out.write(f"if ! grep -q \"{record},0\" \"log.csv\"; then\n")
-                out.write(f"\t{cmd_prefix} --tensorpath {tensor} --maxiters 10 --ntrials 10 --init {param['init']} --lra {param['lra']} --qrd {param['qr']} --ttmc_u {param['ttmc_u']} --lra_u {param['lra_u']} --tol 1e-16 --ranks {rankstr}\n")
-                out.write(f"\techo '{record},'$? >> log.csv\n")
+                out.write(f"if ! grep -q \"{record},0\" \"{logname}.csv\"; then\n")
+                out.write(f"\t{cmd_prefix} --tensorpath {tensor} --maxiters 10 --ntrials 10 --init {param['init']} --lra {param['lra']} --qrd {param['qr']} --ttmc_u {param['ttmc_u']} --lra_u {param['lra_u']} --tol 1e-16 --ranks {rankstr} --mode cuda\n")
+                out.write(f"\techo '{record},'$? >> {logname}.csv\n")
                 out.write("fi\n")
 
 

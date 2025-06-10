@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 from matplotlib.cm import get_cmap
 
-path = "./results/"
-plotpath = "./plots/"
+path = "./results/results_v2/"
+plotpath = "./plots/plots_v2/"
 
 
 @dataclass(eq=True, frozen=True)
@@ -43,17 +43,19 @@ def parse_filename(fname):
     args = []
     for bit in bits:
         args.append(bit.split(":")[-1])
-    args[0] = args[0].split("/")[-1]
+    #args[0] = args[0].split("/")[-1]
     print(args)
     return Config(*args)
 
 
-def parse_csvs():
+def parse_csvs(prefix):
     files = os.listdir(path)
     df_dict = {}
     for filename in files:
+        if prefix not in filename:
+            continue
+        config = parse_filename(filename[len(prefix)+1:])
         filename = path + filename
-        config = parse_filename(filename)
         with open(filename, 'r') as file:
             df = pd.read_csv(filename)
             df = df.iloc[:, 1:]
@@ -93,8 +95,25 @@ def plot_accuracy(df_dict):
         plt.clf()
 
 
+def plot_timing(df_dict):
+    grouped_data = group_by_tensor_and_rank(df_dict)
+    for tensor_rank in grouped_data:
+        for config in grouped_data[tensor_rank]:
+            plot_config(config, df_dict[config].iloc[:, 1:])
+        plt.grid(True, axis='both', linestyle='-',
+                 color='gray', alpha=0.5, zorder=1)
+        plt.xlabel("Iteration")
+        plt.ylabel("Runtime (s)")
+        plt.title(f"Runtime: {tensor_rank[0]} - {tensor_rank[1]}")
+        plt.legend()
+        plt.savefig(f"{plotpath}{tensor_rank[0]}_{tensor_rank[1]}_timing", bbox_inches='tight')
+        plt.clf()
+
+
 if __name__=="__main__":
-    df_dict = parse_csvs()
-    plot_accuracy(df_dict)
+    timing_df_dict = parse_csvs("timing")
+    plot_timing(timing_df_dict)
+    err_df_dict = parse_csvs("error")
+    plot_accuracy(err_df_dict)
 
 
