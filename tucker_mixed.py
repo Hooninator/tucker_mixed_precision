@@ -329,7 +329,7 @@ def gpu_rrf(d_X, r):
     # TODO: Only do this once?
     S = make_gaussian(d_X.shape[1], r+l, 'cuda', config.ttmc_u)
     Y = d_X @ S
-    Y = to_u(Y, 'fp64')
+    Y = to_u(Y, config.lra_u)
     return qr(Y)
 
 
@@ -347,6 +347,7 @@ def rand_svd(X, r):
 
 
 def gpu_rand_svd(d_X, r):
+    d_X = to_u(d_X, config.ttmc_u)
     Q = gpu_rrf(d_X, r)
     Q = to_u(Q, config.ttmc_u)
     B = Q.T @ d_X
