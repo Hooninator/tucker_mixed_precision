@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from collections import defaultdict
 from matplotlib.cm import get_cmap
 
-path = "./results/results_v2/"
-plotpath = "./plots/plots_v2/"
+path = "./results/results_v3/"
+plotpath = "./plots/plots_v3/"
 
 
 @dataclass(eq=True, frozen=True)
@@ -26,6 +26,9 @@ class Config:
 
     def get_label(self):
         return f"{self.lra}-{self.qr}-lra_{self.lra_u}-ttmc_{self.ttmc_u}"
+
+    def get_label_short(self):
+        return f"svd_{self.lra_u}-ttmc_{self.ttmc_u}"
 
     def get_color(self):
         cmap_name = 'tab10'
@@ -79,6 +82,7 @@ def plot_config(config, df):
     plt.fill_between(x_inds, means + variance, means - variance)
 
 
+
 def plot_accuracy(df_dict):
     # (tensor, rank) => List[config], use to index df_dict
     grouped_data = group_by_tensor_and_rank(df_dict)
@@ -110,9 +114,78 @@ def plot_timing(df_dict):
         plt.clf()
 
 
+def plot_breakdown(df_dict):
+
+    phases = ["ttmc", "factor_update", "scaling"]
+    colors = {"ttmc":"crimson", "factor_update":"steelblue", "scaling":"salmon"}
+    order = {"svd_fp64-ttmc_fp64":0, "svd_fp32-ttmc_fp64":1, "svd_fp32-ttmc_fp16":2}
+
+    grouped_data = group_by_tensor_and_rank(df_dict)
+    for tensor_rank in grouped_data:
+        bottom = np.zeros(len(grouped_data[tensor_rank]))
+        for phase in phases:
+            y_arr = [0] * len(grouped_data[tensor_rank])
+            i = 0
+
+            for config in grouped_data[tensor_rank]:
+                y_arr[order[config.get_label_short()]] = (df_dict[config][phase].mean())
+
+            plt.bar(np.arange(len(grouped_data[tensor_rank])), y_arr, bottom=bottom, label=phase, color=colors[phase], edgecolor='black', linewidth=1, zorder=2)
+            bottom += np.array(y_arr)
+
+        plt.grid(True, axis='both', linestyle='-',
+                 color='gray', alpha=0.5, zorder=1)
+        plt.xticks(np.arange(len(grouped_data[tensor_rank])), labels=list(order.keys())[:len(grouped_data[tensor_rank])])
+        plt.ylabel("Runtime (s)")
+        plt.title(f"Runtime Breakdown: {tensor_rank[0]} - {tensor_rank[1]}")
+        plt.legend()
+        plt.savefig(f"{plotpath}{tensor_rank[0]}_{tensor_rank[1]}_breakdown", bbox_inches='tight')
+        plt.clf()
+
+
+def get_total(df):
+    means = df.mean()
+    return sum(means)
+
+
+def plot_speedup(df_dict):
+    grouped_data = group_by_tensor_and_rank(df_dict)
+    order = {"svd_fp64-ttmc_fp64":0, "svd_fp32-ttmc_fp64":1, "svd_fp32-ttmc_fp16":2}
+    for tensor_rank in grouped_data:
+        n = len(grouped_data[tensor_rank])
+        y_arr = []
+        for config in grouped_data[tensor_rank]:
+            label = config.get_label_short()
+            if order[label] == 0:
+                baseline = get_total(df_dict[config])
+                break
+
+        for config in grouped_data[tensor_rank]:
+            label = config.get_label_short()
+            if order[label] == 0:
+                continue
+            speedup = baseline / (get_total(df_dict[config]))
+            y_arr.append(speedup)
+        fig, ax = plt.subplots()
+        bars = ax.bar(np.arange(len(y_arr)), y_arr, color="limegreen", edgecolor='black', linewidth=1, zorder=2)
+        ax.bar_label(bars, fmt=lambda x: f'{x:.2f}x')
+
+        plt.rcParams['font.size'] = 12
+
+        plt.grid(True, axis='both', linestyle='-',
+                 color='gray', alpha=0.5, zorder=1)
+        plt.xticks(np.arange(len(y_arr)), labels=list(order.keys())[1:1+len(y_arr)])
+        plt.ylabel("Speedup")
+        plt.title(f"Speedup: {tensor_rank[0]} - {tensor_rank[1]}")
+        plt.legend()
+        plt.savefig(f"{plotpath}{tensor_rank[0]}_{tensor_rank[1]}_speedup", bbox_inches='tight')
+        plt.clf()
+
+
 if __name__=="__main__":
     timing_df_dict = parse_csvs("timing")
-    plot_timing(timing_df_dict)
+    #plot_breakdown(timing_df_dict)
+    plot_speedup(timing_df_dict)
     err_df_dict = parse_csvs("error")
     plot_accuracy(err_df_dict)
 

@@ -7,16 +7,21 @@ import pandas as pd
 
 from dataclasses import dataclass
 from functools import reduce
+from collections import defaultdict
+from timer import Timer
 
 from scipy.io import loadmat
 
 import time
+
 
 ##################################################
 #
 #               UTILITY FUNCTIONS
 #
 ##################################################
+
+timer = Timer()
 
 
 def get_tensorname(path):
@@ -126,7 +131,7 @@ def gpu_compute_error(d_X_fp64, d_G, d_U_list):
     # Compute this in fp64
     d_G = to_u(d_G, 'fp64')
     d_U_list = m_to_u(d_U_list, 'fp64')
-    d_T = ttmc_faster(d_G, d_U_list, False)
+    d_T = ttmc_fast(d_G, d_U_list, False)
 
     d_U_list = m_to_u(d_U_list, config.ttmc_u)
     return (torch.linalg.norm(d_X_fp64 - d_T) / torch.linalg.norm(d_X_fp64)).item()
@@ -204,7 +209,7 @@ def form_core(X, U_list):
 
 
 def gpu_form_core(d_X, d_U_list):
-    d_G = ttmc_faster(d_X, d_U_list, True)
+    d_G = ttmc_fast(d_X, d_U_list, True)
     return d_G
 
 
@@ -263,6 +268,14 @@ def ugemm(A, B, precision):
     d_C = d_A @ d_B
     C = to_u_cpu(d_C, "fp64")
     return C
+
+
+def unfold_all_modes(d_X):
+    unfoldings = []
+    N = d_X.ndim
+    for n in range(N):
+        unfoldings.append(unfold(d_X, n))
+    return unfoldings
 
 
 ##################################################
@@ -484,25 +497,37 @@ def ttmc(X, matrices, transpose, exclude=[]):
 
 
 def ttmc_fast(d_X, matrices, transpose, exclude=[]):
+
+    assert (len(exclude) == 0 or len(exclude) == 1)
+
     n = len(matrices)
     dims = list(d_X.shape)
     d_Y = d_X
+
     for i in range(n):
+
         if i in exclude:
             continue
+
         d_Y = gpu_unfold(d_Y, i)
         d_U = matrices[i]
+
         if transpose:
             d_Y = d_U.T @ d_Y
             dims[i] = d_U.shape[1]
         else:
             d_Y = d_U @ d_Y
             dims[i] = d_U.shape[0]
+
+        if i == n and exclude != []:
+            return unfold(d_Y, exclude[0])
+
         d_Y = gpu_fold(d_Y, i, dims)
+
     return d_Y
 
 
-def ttmc_faster(d_X, matrices, transpose, exclude=[]):
+def ttmc_batched(d_X, matrices, transpose, exclude=[]):
 
     n = len(matrices)
     dims = list(d_X.shape)
@@ -624,28 +649,30 @@ def hooi_fast(X, ranks, maxiters):
     # Main loop
     iter = 0
     N = d_X.ndim
-    times = [0]
     while iter < maxiters:
 
-        stime = time.time()
-
         for n in range(N):
+            
+            timer.stime("ttmc")
+            d_Y_n = ttmc_fast(d_X, d_U_list, True, [n])
+            timer.etime("ttmc")
 
-            d_Y_n = ttmc_faster(d_X, d_U_list, True, [n])
-
+            timer.stime("scaling")
             if n == 0:
                 d_Y_n = apply_scaling_matrix(d_Y_n, d_D, False)
+            timer.etime("scaling")
 
+            timer.stime("factor_update")
             d_U_n = update_factor(d_Y_n, n, ranks[n])
+            timer.etime("factor_update")
 
+            timer.stime("scaling")
             if n == 0:
                 d_U_n = apply_scaling_matrix(d_U_n, d_D, False)
                 d_U_n = to_u(d_U_n, config.ttmc_u)
+            timer.etime("scaling")
 
             d_U_list[n] = d_U_n
-
-        etime = time.time()
-        times.append((etime - stime))
 
         err_prev = err_curr
         d_G = gpu_form_core(d_X, d_U_list)
@@ -657,7 +684,7 @@ def hooi_fast(X, ranks, maxiters):
         errors.append(err_curr)
 
     print(f"Final error: {err_curr}")
-    return errors, times
+    return errors
 
 
 def hooi_scaled(X, ranks, maxiters):
@@ -678,17 +705,12 @@ def get_filename(args):
     return f"{get_tensorname(args.tensorpath)}-lra:{args.lra}-qr:{args.qrd}-init:{args.init}-ttmcu:{args.ttmc_u}-lrau:{args.lra_u}-{rankstr(args.ranks)}.csv"
 
 
-datadir = "./results/results_v2/"
+datadir = "./results/results_v3/"
 
 
 def write_stats(args, error_mat):
     df = pd.DataFrame(error_mat)
     df.to_csv(f"{datadir}error_{get_filename(args)}")
-
-
-def write_times(args, times_mat):
-    df = pd.DataFrame(times_mat)
-    df.to_csv(f"{datadir}timing_{get_filename(args)}")
 
 
 if __name__ == "__main__":
@@ -725,12 +747,10 @@ if __name__ == "__main__":
     print(f"Reference Error: {ref_error}")
 
     error_mat = np.zeros(shape=(args.ntrials, args.maxiters + 1))
-    times_mat = np.zeros(shape=(args.ntrials, args.maxiters + 1))
     for i in range(args.ntrials):
-        errors, times = hooi_fast(X, ranks, args.maxiters)
+        errors = hooi_fast(X, ranks, args.maxiters)
         error_mat[i] = errors
-        times_mat[i] = times
-    print(f"Final times: {times_mat[args.ntrials-1]}")
+        timer.commit()
 
     write_stats(args, error_mat)
-    write_times(args, times_mat)
+    timer.write_csv(f"{datadir}timing_{get_filename(args)}")
